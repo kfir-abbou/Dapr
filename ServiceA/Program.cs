@@ -46,6 +46,16 @@ const string TopicName = "system-events";
 // System state options
 var validStates = new[] { "idle", "running", "setup", "procedure", "error" };
 
+// State transition rules - defines which states can transition to which
+var validTransitions = new Dictionary<string, string[]>
+{
+    { "idle", new[] { "setup", "error" } },
+    { "setup", new[] { "running", "idle", "error" } },
+    { "running", new[] { "procedure", "idle", "error" } },
+    { "procedure", new[] { "running", "idle", "error" } },
+    { "error", new[] { "idle" } }  // From error, can only go back to idle
+};
+
 // ==================== System State Endpoints ====================
 
 // Get current system state
@@ -57,18 +67,75 @@ app.MapGet("/state", async (DaprClient daprClient) =>
 .WithName("GetSystemState")
 .WithOpenApi();
 
-// Set system state
+// Get valid transitions from current state
+app.MapGet("/state/transitions", async (DaprClient daprClient) =>
+{
+    var state = await daprClient.GetStateAsync<SystemState>(StateStoreName, SystemStateKey);
+    var currentStatus = state?.Status ?? "idle";
+    
+    var allowedTransitions = validTransitions.GetValueOrDefault(currentStatus, Array.Empty<string>());
+    
+    return Results.Ok(new
+    {
+        CurrentState = currentStatus,
+        AllowedTransitions = allowedTransitions
+    });
+})
+.WithName("GetStateTransitions")
+.WithOpenApi();
+
+// Change system state (with validation)
 app.MapPost("/state", async (DaprClient daprClient, [FromBody] SetStateRequest request) =>
 {
-    if (!validStates.Contains(request.Status.ToLower()))
+    var requestedState = request.Status.ToLower();
+    
+    // Validate the requested state is a known state
+    if (!validStates.Contains(requestedState))
     {
-        return Results.BadRequest($"Invalid state. Valid states are: {string.Join(", ", validStates)}");
+        return Results.BadRequest(new StateChangeResult
+        {
+            Success = false,
+            Message = $"Invalid state '{request.Status}'. Valid states are: {string.Join(", ", validStates)}",
+            CurrentState = null,
+            RequestedState = requestedState
+        });
     }
 
+    // Get current state
+    var currentState = await daprClient.GetStateAsync<SystemState>(StateStoreName, SystemStateKey);
+    var currentStatus = currentState?.Status ?? "idle";
+
+    // Check if transition is valid
+    var allowedTransitions = validTransitions.GetValueOrDefault(currentStatus, Array.Empty<string>());
+    
+    if (currentStatus == requestedState)
+    {
+        return Results.Ok(new StateChangeResult
+        {
+            Success = true,
+            Message = $"Already in state '{currentStatus}'",
+            CurrentState = currentStatus,
+            RequestedState = requestedState
+        });
+    }
+
+    if (!allowedTransitions.Contains(requestedState))
+    {
+        return Results.BadRequest(new StateChangeResult
+        {
+            Success = false,
+            Message = $"Invalid transition from '{currentStatus}' to '{requestedState}'. Allowed transitions: {string.Join(", ", allowedTransitions)}",
+            CurrentState = currentStatus,
+            RequestedState = requestedState
+        });
+    }
+
+    // Create new state
     var newState = new SystemState
     {
-        Status = request.Status.ToLower(),
-        LastUpdated = DateTime.UtcNow
+        Status = requestedState,
+        LastUpdated = DateTime.UtcNow,
+        PreviousStatus = currentStatus
     };
 
     // Save state using Dapr state store
@@ -78,13 +145,63 @@ app.MapPost("/state", async (DaprClient daprClient, [FromBody] SetStateRequest r
     await daprClient.PublishEventAsync(PubSubName, TopicName, new SystemEvent
     {
         EventType = "StateChanged",
+        PreviousState = currentStatus,
         NewState = newState.Status,
         Timestamp = DateTime.UtcNow
     });
 
-    return Results.Ok(newState);
+    return Results.Ok(new StateChangeResult
+    {
+        Success = true,
+        Message = $"State changed from '{currentStatus}' to '{requestedState}'",
+        CurrentState = requestedState,
+        RequestedState = requestedState,
+        PreviousState = currentStatus
+    });
 })
-.WithName("SetSystemState")
+.WithName("ChangeSystemState")
+.WithOpenApi();
+
+// Force set state (bypasses transition validation - for admin/recovery)
+app.MapPost("/state/force", async (DaprClient daprClient, [FromBody] SetStateRequest request) =>
+{
+    var requestedState = request.Status.ToLower();
+    
+    if (!validStates.Contains(requestedState))
+    {
+        return Results.BadRequest($"Invalid state. Valid states are: {string.Join(", ", validStates)}");
+    }
+
+    var currentState = await daprClient.GetStateAsync<SystemState>(StateStoreName, SystemStateKey);
+    var currentStatus = currentState?.Status ?? "idle";
+
+    var newState = new SystemState
+    {
+        Status = requestedState,
+        LastUpdated = DateTime.UtcNow,
+        PreviousStatus = currentStatus
+    };
+
+    await daprClient.SaveStateAsync(StateStoreName, SystemStateKey, newState);
+
+    await daprClient.PublishEventAsync(PubSubName, TopicName, new SystemEvent
+    {
+        EventType = "StateForced",
+        PreviousState = currentStatus,
+        NewState = newState.Status,
+        Timestamp = DateTime.UtcNow
+    });
+
+    return Results.Ok(new StateChangeResult
+    {
+        Success = true,
+        Message = $"State forced from '{currentStatus}' to '{requestedState}'",
+        CurrentState = requestedState,
+        RequestedState = requestedState,
+        PreviousState = currentStatus
+    });
+})
+.WithName("ForceSystemState")
 .WithOpenApi();
 
 // ==================== Service B Integration Endpoints ====================
@@ -143,6 +260,7 @@ public record SystemState
 {
     public string Status { get; init; } = "idle";
     public DateTime LastUpdated { get; init; }
+    public string? PreviousStatus { get; init; }
 }
 
 public record SetStateRequest
@@ -150,9 +268,19 @@ public record SetStateRequest
     public string Status { get; init; } = string.Empty;
 }
 
+public record StateChangeResult
+{
+    public bool Success { get; init; }
+    public string Message { get; init; } = string.Empty;
+    public string? CurrentState { get; init; }
+    public string? RequestedState { get; init; }
+    public string? PreviousState { get; init; }
+}
+
 public record SystemEvent
 {
     public string EventType { get; init; } = string.Empty;
+    public string? PreviousState { get; init; }
     public string NewState { get; init; } = string.Empty;
     public DateTime Timestamp { get; init; }
 }

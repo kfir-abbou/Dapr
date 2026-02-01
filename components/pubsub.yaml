@@ -6,6 +6,3 @@ spec:
   type: pubsub.in-memory
   version: v1
   metadata: []
-scopes:
-  - servicea
-  - serviceb

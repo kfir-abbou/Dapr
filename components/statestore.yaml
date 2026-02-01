@@ -6,6 +6,3 @@ spec:
   type: state.in-memory
   version: v1
   metadata: []
-scopes:
-  - servicea
-  - serviceb
