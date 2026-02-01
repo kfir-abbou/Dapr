@@ -1,0 +1,21 @@
+# Dapr Multi-App Run configuration
+version: 1
+common:
+  resourcesPath: ./components
+  configFilePath: ./config.yaml
+apps:
+  - appId: servicea
+    appDirPath: ./ServiceA
+    appPort: 5001
+    command: ["dotnet", "run"]
+    daprHTTPPort: 3501
+    daprGRPCPort: 50001
+    metricsPort: 9091
+    
+  - appId: serviceb
+    appDirPath: ./ServiceB
+    appPort: 5002
+    command: ["dotnet", "run"]
+    daprHTTPPort: 3502
+    daprGRPCPort: 50002
+    metricsPort: 9092

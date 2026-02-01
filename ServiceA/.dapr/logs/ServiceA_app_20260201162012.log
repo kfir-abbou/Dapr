@@ -1,0 +1,12 @@
+== APP - ServiceA == Using launch settings from D:\Dev\Dapr\ServiceA\Properties\launchSettings.json...
+== APP - ServiceA == Building...
+== APP - ServiceA == info: Microsoft.Hosting.Lifetime[14]
+== APP - ServiceA ==       Now listening on: http://localhost:5001
+== APP - ServiceA == info: Microsoft.Hosting.Lifetime[0]
+== APP - ServiceA ==       Application started. Press Ctrl+C to shut down.
+== APP - ServiceA == info: Microsoft.Hosting.Lifetime[0]
+== APP - ServiceA ==       Hosting environment: Development
+== APP - ServiceA == info: Microsoft.Hosting.Lifetime[0]
+== APP - ServiceA ==       Content root path: D:\Dev\Dapr\ServiceA
+
+termination signal received: shutting down
