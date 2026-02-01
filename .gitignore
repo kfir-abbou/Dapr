@@ -1,9 +1,56 @@
-# Log files
-*.log
-
 # Build outputs
 bin/
 obj/
+out/
+*.dll
+*.pdb
+*.exe
+*.cache
+
+# Log files
+*.log
 
 # Dapr logs
 **/.dapr/
+
+# User-specific files
+*.user
+*.userosscache
+*.suo
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Visual Studio
+.vs/
+*.sln.docstates
+
+# NuGet
+*.nupkg
+**/packages/*
+!**/packages/build/
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# Test results
+TestResults/
+*.trx
+
+# Coverage
+coverage/
+*.coverage
+*.coveragexml
