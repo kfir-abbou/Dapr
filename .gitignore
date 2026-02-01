@@ -1,0 +1,9 @@
+# Log files
+*.log
+
+# Build outputs
+bin/
+obj/
+
+# Dapr logs
+**/.dapr/
