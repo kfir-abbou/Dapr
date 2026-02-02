@@ -1,5 +1,6 @@
 using Dapr.Client;
 using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -43,6 +44,10 @@ const string SystemStateKey = "system-state";
 const string PubSubName = "pubsub";
 const string TopicName = "system-events";
 
+// State backup configuration from appsettings
+var stateBackupBindingName = builder.Configuration["StateBackup:BindingName"] ?? "statebackup";
+var stateBackupFileName = builder.Configuration["StateBackup:FileName"] ?? "system-state.json";
+
 // System state options
 var validStates = new[] { "idle", "running", "setup", "procedure", "error" };
 
@@ -55,6 +60,52 @@ var validTransitions = new Dictionary<string, string[]>
     { "procedure", new[] { "running", "idle", "error" } },
     { "error", new[] { "idle" } }  // From error, can only go back to idle
 };
+
+// Helper function to save state to file using Dapr binding
+async Task SaveStateToFileAsync(DaprClient daprClient, SystemState state)
+{
+    var stateJson = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
+    var metadata = new Dictionary<string, string>
+    {
+        { "fileName", stateBackupFileName }
+    };
+    
+    await daprClient.InvokeBindingAsync(
+        stateBackupBindingName,
+        "create",
+        stateJson,
+        metadata);
+}
+
+// Save initial state to file on app startup
+app.Lifetime.ApplicationStarted.Register(async () =>
+{
+    // Wait a moment for Dapr sidecar to be ready
+    await Task.Delay(2000);
+    
+    try
+    {
+        using var scope = app.Services.CreateScope();
+        var daprClient = scope.ServiceProvider.GetRequiredService<DaprClient>();
+        
+        var state = await daprClient.GetStateAsync<SystemState>(StateStoreName, SystemStateKey);
+        var currentState = state ?? new SystemState { Status = "idle", LastUpdated = DateTime.UtcNow };
+        
+        // If no state exists, save initial state
+        if (state == null)
+        {
+            await daprClient.SaveStateAsync(StateStoreName, SystemStateKey, currentState);
+        }
+        
+        // Save state to file
+        await SaveStateToFileAsync(daprClient, currentState);
+        Console.WriteLine($"[StateBackup] Initial state saved to file: {stateBackupFileName}");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[StateBackup] Error saving initial state: {ex.Message}");
+    }
+});
 
 // ==================== System State Endpoints ====================
 
@@ -141,6 +192,9 @@ app.MapPost("/state", async (DaprClient daprClient, [FromBody] SetStateRequest r
     // Save state using Dapr state store
     await daprClient.SaveStateAsync(StateStoreName, SystemStateKey, newState);
 
+    // Save state to file using Dapr binding
+    await SaveStateToFileAsync(daprClient, newState);
+
     // Publish state change event
     await daprClient.PublishEventAsync(PubSubName, TopicName, new SystemEvent
     {
@@ -183,6 +237,9 @@ app.MapPost("/state/force", async (DaprClient daprClient, [FromBody] SetStateReq
     };
 
     await daprClient.SaveStateAsync(StateStoreName, SystemStateKey, newState);
+
+    // Save state to file using Dapr binding
+    await SaveStateToFileAsync(daprClient, newState);
 
     await daprClient.PublishEventAsync(PubSubName, TopicName, new SystemEvent
     {
