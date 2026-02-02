@@ -1,4 +1,6 @@
+using Dapr;
 using Dapr.Client;
+using Dapr.Workflow;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
 
@@ -13,6 +15,17 @@ builder.Services.AddDaprClient(daprClientBuilder =>
     
     daprClientBuilder.UseHttpEndpoint($"http://localhost:{daprHttpPort}");
     daprClientBuilder.UseGrpcEndpoint($"http://localhost:{daprGrpcPort}");
+});
+
+// Add Dapr Workflow
+builder.Services.AddDaprWorkflow(options =>
+{
+    // Register the setup workflow and its activities
+    options.RegisterWorkflow<SetupWorkflow>();
+    options.RegisterActivity<InitializeSystemActivity>();
+    options.RegisterActivity<ConfigureParametersActivity>();
+    options.RegisterActivity<ValidateConfigurationActivity>();
+    options.RegisterActivity<FinalizeSetupActivity>();
 });
 
 // Add HttpClient for ServiceB (direct calls for local development)
@@ -43,6 +56,8 @@ const string StateStoreName = "statestore";
 const string SystemStateKey = "system-state";
 const string PubSubName = "pubsub";
 const string TopicName = "system-events";
+const string ItemRequestTopic = "item-requests";
+const string ItemResponseTopic = "item-responses";
 
 // State backup configuration from appsettings
 var stateBackupBindingName = builder.Configuration["StateBackup:BindingName"] ?? "statebackup";
@@ -204,10 +219,24 @@ app.MapPost("/state", async (DaprClient daprClient, [FromBody] SetStateRequest r
         Timestamp = DateTime.UtcNow
     });
 
+    // Start setup workflow if transitioning to "setup" state
+    string? workflowInstanceId = null;
+    if (requestedState == "setup")
+    {
+        var workflowClient = app.Services.GetRequiredService<DaprWorkflowClient>();
+        workflowInstanceId = $"setup-{Guid.NewGuid():N}";
+        await workflowClient.ScheduleNewWorkflowAsync(
+            name: nameof(SetupWorkflow),
+            instanceId: workflowInstanceId,
+            input: new SetupWorkflowInput { StartedAt = DateTime.UtcNow });
+        Console.WriteLine($"[Workflow] Started SetupWorkflow with instance ID: {workflowInstanceId}");
+    }
+
     return Results.Ok(new StateChangeResult
     {
         Success = true,
-        Message = $"State changed from '{currentStatus}' to '{requestedState}'",
+        Message = $"State changed from '{currentStatus}' to '{requestedState}'" + 
+                  (workflowInstanceId != null ? $". Workflow started: {workflowInstanceId}" : ""),
         CurrentState = requestedState,
         RequestedState = requestedState,
         PreviousState = currentStatus
@@ -280,6 +309,56 @@ app.MapGet("/items", async (IHttpClientFactory httpClientFactory) =>
 .WithName("GetItems")
 .WithOpenApi();
 
+// ==================== Async Pub/Sub Endpoints ====================
+
+// Request item processing asynchronously via Dapr Pub/Sub
+app.MapPost("/items/process", async (DaprClient daprClient, [FromBody] ItemProcessRequest request) =>
+{
+    var correlationId = Guid.NewGuid().ToString();
+    
+    var message = new ItemProcessMessage
+    {
+        CorrelationId = correlationId,
+        ItemId = request.ItemId,
+        Operation = request.Operation,
+        RequestedBy = "ServiceA",
+        RequestedAt = DateTime.UtcNow
+    };
+    
+    // Publish request to ServiceB via Dapr Pub/Sub
+    await daprClient.PublishEventAsync(PubSubName, ItemRequestTopic, message);
+    
+    Console.WriteLine($"[PubSub] Published item process request: {correlationId} - Operation: {request.Operation} on Item {request.ItemId}");
+    
+    return Results.Accepted(value: new
+    {
+        Message = "Item processing request submitted",
+        CorrelationId = correlationId,
+        Operation = request.Operation,
+        ItemId = request.ItemId
+    });
+})
+.WithName("RequestItemProcessing")
+.WithOpenApi();
+
+// Subscribe to item processing responses from ServiceB
+app.MapPost("/events/item-response", [Topic(PubSubName, ItemResponseTopic)] (ItemProcessResponse response, ILogger<Program> logger) =>
+{
+    logger.LogInformation(
+        "[PubSub] Received item response: CorrelationId={CorrelationId}, Success={Success}, Message={Message}",
+        response.CorrelationId, response.Success, response.Message);
+    
+    // Here you could:
+    // - Store the result in state store
+    // - Notify connected clients via SignalR
+    // - Trigger another workflow
+    // - Update a dashboard
+    
+    return Results.Ok();
+})
+.WithName("HandleItemResponse")
+.WithOpenApi();
+
 // Get specific item from ServiceB via direct HTTP call
 app.MapGet("/items/{id:int}", async (IHttpClientFactory httpClientFactory, int id) =>
 {
@@ -307,6 +386,31 @@ app.MapGet("/items/{id:int}", async (IHttpClientFactory httpClientFactory, int i
 
 app.MapGet("/health", () => Results.Ok(new { Status = "Healthy", Service = "ServiceA", Timestamp = DateTime.UtcNow }))
 .WithName("Health")
+.WithOpenApi();
+
+// ==================== Workflow Endpoints ====================
+
+// Get workflow status
+app.MapGet("/workflow/{instanceId}", async (string instanceId) =>
+{
+    var workflowClient = app.Services.GetRequiredService<DaprWorkflowClient>();
+    var state = await workflowClient.GetWorkflowStateAsync(instanceId);
+    
+    if (state == null)
+    {
+        return Results.NotFound($"Workflow instance '{instanceId}' not found");
+    }
+    
+    return Results.Ok(new
+    {
+        InstanceId = instanceId,
+        Status = state.RuntimeStatus.ToString(),
+        CreatedAt = state.CreatedAt,
+        LastUpdatedAt = state.LastUpdatedAt,
+        Output = state.ReadOutputAs<string>()
+    });
+})
+.WithName("GetWorkflowStatus")
 .WithOpenApi();
 
 app.Run();
@@ -348,4 +452,160 @@ public record Item
     public string Name { get; init; } = string.Empty;
     public string Description { get; init; } = string.Empty;
     public decimal Price { get; init; }
+}
+
+// ==================== Pub/Sub Models ====================
+
+public record ItemProcessRequest
+{
+    public int ItemId { get; init; }
+    public string Operation { get; init; } = string.Empty; // "validate", "enrich", "archive"
+}
+
+public record ItemProcessMessage
+{
+    public string CorrelationId { get; init; } = string.Empty;
+    public int ItemId { get; init; }
+    public string Operation { get; init; } = string.Empty;
+    public string RequestedBy { get; init; } = string.Empty;
+    public DateTime RequestedAt { get; init; }
+}
+
+public record ItemProcessResponse
+{
+    public string CorrelationId { get; init; } = string.Empty;
+    public int ItemId { get; init; }
+    public string Operation { get; init; } = string.Empty;
+    public bool Success { get; init; }
+    public string Message { get; init; } = string.Empty;
+    public DateTime ProcessedAt { get; init; }
+}
+
+// ==================== Workflow Models ====================
+
+public record SetupWorkflowInput
+{
+    public DateTime StartedAt { get; init; }
+}
+
+public record ActivityResult
+{
+    public string ActivityName { get; init; } = string.Empty;
+    public bool Success { get; init; }
+    public string Message { get; init; } = string.Empty;
+    public DateTime CompletedAt { get; init; }
+}
+
+// ==================== Setup Workflow ====================
+
+public class SetupWorkflow : Workflow<SetupWorkflowInput, string>
+{
+    public override async Task<string> RunAsync(WorkflowContext context, SetupWorkflowInput input)
+    {
+        var results = new List<ActivityResult>();
+        
+        // Step 1: Initialize System
+        var initResult = await context.CallActivityAsync<ActivityResult>(
+            nameof(InitializeSystemActivity), 
+            "Starting system initialization");
+        results.Add(initResult);
+        
+        // Step 2: Configure Parameters
+        var configResult = await context.CallActivityAsync<ActivityResult>(
+            nameof(ConfigureParametersActivity), 
+            "Configuring system parameters");
+        results.Add(configResult);
+        
+        // Step 3: Validate Configuration
+        var validateResult = await context.CallActivityAsync<ActivityResult>(
+            nameof(ValidateConfigurationActivity), 
+            "Validating configuration");
+        results.Add(validateResult);
+        
+        // Step 4: Finalize Setup
+        var finalizeResult = await context.CallActivityAsync<ActivityResult>(
+            nameof(FinalizeSetupActivity), 
+            "Finalizing setup");
+        results.Add(finalizeResult);
+        
+        return $"Setup completed successfully. {results.Count} activities executed.";
+    }
+}
+
+// ==================== Workflow Activities ====================
+
+public class InitializeSystemActivity : WorkflowActivity<string, ActivityResult>
+{
+    public override async Task<ActivityResult> RunAsync(WorkflowActivityContext context, string input)
+    {
+        Console.WriteLine($"[Activity] InitializeSystemActivity: {input}");
+        
+        // Simulate work
+        await Task.Delay(3000);
+        
+        return new ActivityResult
+        {
+            ActivityName = nameof(InitializeSystemActivity),
+            Success = true,
+            Message = "System initialized successfully",
+            CompletedAt = DateTime.UtcNow
+        };
+    }
+}
+
+public class ConfigureParametersActivity : WorkflowActivity<string, ActivityResult>
+{
+    public override async Task<ActivityResult> RunAsync(WorkflowActivityContext context, string input)
+    {
+        Console.WriteLine($"[Activity] ConfigureParametersActivity: {input}");
+        
+        // Simulate work
+        await Task.Delay(2000);
+        
+        return new ActivityResult
+        {
+            ActivityName = nameof(ConfigureParametersActivity),
+            Success = true,
+            Message = "Parameters configured successfully",
+            CompletedAt = DateTime.UtcNow
+        };
+    }
+}
+
+public class ValidateConfigurationActivity : WorkflowActivity<string, ActivityResult>
+{
+    public override async Task<ActivityResult> RunAsync(WorkflowActivityContext context, string input)
+    {
+        Console.WriteLine($"[Activity] ValidateConfigurationActivity: {input}");
+        
+        // Simulate work
+        await Task.Delay(2500);
+        
+        return new ActivityResult
+        {
+            ActivityName = nameof(ValidateConfigurationActivity),
+            Success = true,
+            Message = "Configuration validated successfully",
+            CompletedAt = DateTime.UtcNow
+        };
+    }
+}
+
+public class FinalizeSetupActivity : WorkflowActivity<string, ActivityResult>
+{
+    public override async Task<ActivityResult> RunAsync(WorkflowActivityContext context, string input)
+    {
+        Console.WriteLine($"[Activity] FinalizeSetupActivity: {input}");
+        
+        // Simulate work
+        await Task.Delay(1500);
+        
+        return new ActivityResult
+        {
+            ActivityName = nameof(FinalizeSetupActivity),
+            Success = true,
+            Message = "Setup finalized successfully",
+            CompletedAt = DateTime.UtcNow
+        };
+    }
 }

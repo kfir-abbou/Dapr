@@ -37,6 +37,8 @@ app.MapSubscribeHandler();
 
 const string PubSubName = "pubsub";
 const string TopicName = "system-events";
+const string ItemRequestTopic = "item-requests";
+const string ItemResponseTopic = "item-responses";
 
 // ==================== Item Endpoints ====================
 
@@ -98,6 +100,84 @@ app.MapPost("/events/system", [Topic(PubSubName, TopicName)] (SystemEvent @event
 .WithName("HandleSystemEvent")
 .WithOpenApi();
 
+// Subscribe to item processing requests from ServiceA
+app.MapPost("/events/item-request", [Topic(PubSubName, ItemRequestTopic)] async (
+    ItemProcessMessage request, 
+    ItemStore store, 
+    DaprClient daprClient,
+    ILogger<Program> logger) =>
+{
+    logger.LogInformation(
+        "[PubSub] Received item process request: CorrelationId={CorrelationId}, Operation={Operation}, ItemId={ItemId}",
+        request.CorrelationId, request.Operation, request.ItemId);
+    
+    // Simulate processing time
+    await Task.Delay(2000);
+    
+    // Process based on operation
+    var item = store.GetById(request.ItemId);
+    bool success;
+    string message;
+    
+    if (item == null)
+    {
+        success = false;
+        message = $"Item {request.ItemId} not found";
+    }
+    else
+    {
+        switch (request.Operation.ToLower())
+        {
+            case "validate":
+                // Simulate validation
+                await Task.Delay(1000);
+                success = true;
+                message = $"Item '{item.Name}' validated successfully. Price: {item.Price:C}";
+                break;
+                
+            case "enrich":
+                // Simulate enrichment
+                await Task.Delay(1500);
+                success = true;
+                message = $"Item '{item.Name}' enriched with additional metadata";
+                break;
+                
+            case "archive":
+                // Simulate archiving
+                await Task.Delay(500);
+                success = true;
+                message = $"Item '{item.Name}' archived successfully";
+                break;
+                
+            default:
+                success = false;
+                message = $"Unknown operation: {request.Operation}";
+                break;
+        }
+    }
+    
+    // Publish response back to ServiceA
+    var response = new ItemProcessResponse
+    {
+        CorrelationId = request.CorrelationId,
+        ItemId = request.ItemId,
+        Operation = request.Operation,
+        Success = success,
+        Message = message,
+        ProcessedAt = DateTime.UtcNow
+    };
+    
+    await daprClient.PublishEventAsync(PubSubName, ItemResponseTopic, response);
+    
+    logger.LogInformation(
+        "[PubSub] Published item response: CorrelationId={CorrelationId}, Success={Success}",
+        response.CorrelationId, response.Success);
+    
+    return Results.Ok();
+})
+.WithName("HandleItemRequest")
+.WithOpenApi();
+
 // ==================== Health Endpoint ====================
 
 app.MapGet("/health", () => Results.Ok(new { Status = "Healthy", Service = "ServiceB", Timestamp = DateTime.UtcNow }))
@@ -135,6 +215,27 @@ public record SystemEvent
     public string EventType { get; init; } = string.Empty;
     public string NewState { get; init; } = string.Empty;
     public DateTime Timestamp { get; init; }
+}
+
+// ==================== Pub/Sub Models ====================
+
+public record ItemProcessMessage
+{
+    public string CorrelationId { get; init; } = string.Empty;
+    public int ItemId { get; init; }
+    public string Operation { get; init; } = string.Empty;
+    public string RequestedBy { get; init; } = string.Empty;
+    public DateTime RequestedAt { get; init; }
+}
+
+public record ItemProcessResponse
+{
+    public string CorrelationId { get; init; } = string.Empty;
+    public int ItemId { get; init; }
+    public string Operation { get; init; } = string.Empty;
+    public bool Success { get; init; }
+    public string Message { get; init; } = string.Empty;
+    public DateTime ProcessedAt { get; init; }
 }
 
 // ==================== In-Memory Store ====================
