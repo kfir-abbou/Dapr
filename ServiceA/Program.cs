@@ -58,6 +58,7 @@ const string PubSubName = "pubsub";
 const string TopicName = "system-events";
 const string ItemRequestTopic = "item-requests";
 const string ItemResponseTopic = "item-responses";
+const string WorkflowProgressTopic = "workflow-progress";
 
 // State backup configuration from appsettings
 var stateBackupBindingName = builder.Configuration["StateBackup:BindingName"] ?? "statebackup";
@@ -228,7 +229,7 @@ app.MapPost("/state", async (DaprClient daprClient, [FromBody] SetStateRequest r
         await workflowClient.ScheduleNewWorkflowAsync(
             name: nameof(SetupWorkflow),
             instanceId: workflowInstanceId,
-            input: new SetupWorkflowInput { StartedAt = DateTime.UtcNow });
+            input: new SetupWorkflowInput { WorkflowInstanceId = workflowInstanceId, StartedAt = DateTime.UtcNow });
         Console.WriteLine($"[Workflow] Started SetupWorkflow with instance ID: {workflowInstanceId}");
     }
 
@@ -359,6 +360,23 @@ app.MapPost("/events/item-response", [Topic(PubSubName, ItemResponseTopic)] (Ite
 .WithName("HandleItemResponse")
 .WithOpenApi();
 
+// Subscribe to workflow progress events
+app.MapPost("/events/workflow-progress", [Topic(PubSubName, WorkflowProgressTopic)] (WorkflowProgressEvent progress, ILogger<Program> logger) =>
+{
+    logger.LogInformation(
+        "[Workflow] Progress: {WorkflowId} - {ActivityName} - {PercentComplete}% - {Message}",
+        progress.WorkflowInstanceId, progress.ActivityName, progress.PercentComplete, progress.Message);
+    
+    // Here you could:
+    // - Update a progress indicator in the UI
+    // - Store progress in state store for polling
+    // - Send real-time updates via SignalR
+    
+    return Results.Ok();
+})
+.WithName("HandleWorkflowProgress")
+.WithOpenApi();
+
 // Get specific item from ServiceB via direct HTTP call
 app.MapGet("/items/{id:int}", async (IHttpClientFactory httpClientFactory, int id) =>
 {
@@ -485,7 +503,26 @@ public record ItemProcessResponse
 
 public record SetupWorkflowInput
 {
+    public string WorkflowInstanceId { get; init; } = string.Empty;
     public DateTime StartedAt { get; init; }
+}
+
+public record WorkflowProgressEvent
+{
+    public string WorkflowInstanceId { get; init; } = string.Empty;
+    public string WorkflowName { get; init; } = string.Empty;
+    public string ActivityName { get; init; } = string.Empty;
+    public int PercentComplete { get; init; }
+    public string Message { get; init; } = string.Empty;
+    public DateTime Timestamp { get; init; }
+}
+
+public record ActivityInput
+{
+    public string WorkflowInstanceId { get; init; } = string.Empty;
+    public string Description { get; init; } = string.Empty;
+    public int StepNumber { get; init; }
+    public int TotalSteps { get; init; }
 }
 
 public record ActivityResult
@@ -500,32 +537,58 @@ public record ActivityResult
 
 public class SetupWorkflow : Workflow<SetupWorkflowInput, string>
 {
+    private const int TotalSteps = 4;
+    
     public override async Task<string> RunAsync(WorkflowContext context, SetupWorkflowInput input)
     {
         var results = new List<ActivityResult>();
         
-        // Step 1: Initialize System
+        // Step 1: Initialize System (25%)
         var initResult = await context.CallActivityAsync<ActivityResult>(
             nameof(InitializeSystemActivity), 
-            "Starting system initialization");
+            new ActivityInput 
+            { 
+                WorkflowInstanceId = input.WorkflowInstanceId,
+                Description = "Starting system initialization",
+                StepNumber = 1,
+                TotalSteps = TotalSteps
+            });
         results.Add(initResult);
         
-        // Step 2: Configure Parameters
+        // Step 2: Configure Parameters (50%)
         var configResult = await context.CallActivityAsync<ActivityResult>(
             nameof(ConfigureParametersActivity), 
-            "Configuring system parameters");
+            new ActivityInput 
+            { 
+                WorkflowInstanceId = input.WorkflowInstanceId,
+                Description = "Configuring system parameters",
+                StepNumber = 2,
+                TotalSteps = TotalSteps
+            });
         results.Add(configResult);
         
-        // Step 3: Validate Configuration
+        // Step 3: Validate Configuration (75%)
         var validateResult = await context.CallActivityAsync<ActivityResult>(
             nameof(ValidateConfigurationActivity), 
-            "Validating configuration");
+            new ActivityInput 
+            { 
+                WorkflowInstanceId = input.WorkflowInstanceId,
+                Description = "Validating configuration",
+                StepNumber = 3,
+                TotalSteps = TotalSteps
+            });
         results.Add(validateResult);
         
-        // Step 4: Finalize Setup
+        // Step 4: Finalize Setup (100%)
         var finalizeResult = await context.CallActivityAsync<ActivityResult>(
             nameof(FinalizeSetupActivity), 
-            "Finalizing setup");
+            new ActivityInput 
+            { 
+                WorkflowInstanceId = input.WorkflowInstanceId,
+                Description = "Finalizing setup",
+                StepNumber = 4,
+                TotalSteps = TotalSteps
+            });
         results.Add(finalizeResult);
         
         return $"Setup completed successfully. {results.Count} activities executed.";
@@ -534,14 +597,47 @@ public class SetupWorkflow : Workflow<SetupWorkflowInput, string>
 
 // ==================== Workflow Activities ====================
 
-public class InitializeSystemActivity : WorkflowActivity<string, ActivityResult>
+public class InitializeSystemActivity : WorkflowActivity<ActivityInput, ActivityResult>
 {
-    public override async Task<ActivityResult> RunAsync(WorkflowActivityContext context, string input)
+    private readonly DaprClient _daprClient;
+    private const string PubSubName = "pubsub";
+    private const string ProgressTopic = "workflow-progress";
+    
+    public InitializeSystemActivity(DaprClient daprClient)
     {
-        Console.WriteLine($"[Activity] InitializeSystemActivity: {input}");
+        _daprClient = daprClient;
+    }
+    
+    public override async Task<ActivityResult> RunAsync(WorkflowActivityContext context, ActivityInput input)
+    {
+        var percentComplete = (int)((double)input.StepNumber / input.TotalSteps * 100);
+        
+        // Publish progress: starting
+        await _daprClient.PublishEventAsync(PubSubName, ProgressTopic, new WorkflowProgressEvent
+        {
+            WorkflowInstanceId = input.WorkflowInstanceId,
+            WorkflowName = nameof(SetupWorkflow),
+            ActivityName = nameof(InitializeSystemActivity),
+            PercentComplete = percentComplete - 25 + 5, // Starting this step
+            Message = $"Starting: {input.Description}",
+            Timestamp = DateTime.UtcNow
+        });
+        
+        Console.WriteLine($"[Activity] InitializeSystemActivity: {input.Description}");
         
         // Simulate work
         await Task.Delay(3000);
+        
+        // Publish progress: completed
+        await _daprClient.PublishEventAsync(PubSubName, ProgressTopic, new WorkflowProgressEvent
+        {
+            WorkflowInstanceId = input.WorkflowInstanceId,
+            WorkflowName = nameof(SetupWorkflow),
+            ActivityName = nameof(InitializeSystemActivity),
+            PercentComplete = percentComplete,
+            Message = "System initialized successfully",
+            Timestamp = DateTime.UtcNow
+        });
         
         return new ActivityResult
         {
@@ -553,14 +649,47 @@ public class InitializeSystemActivity : WorkflowActivity<string, ActivityResult>
     }
 }
 
-public class ConfigureParametersActivity : WorkflowActivity<string, ActivityResult>
+public class ConfigureParametersActivity : WorkflowActivity<ActivityInput, ActivityResult>
 {
-    public override async Task<ActivityResult> RunAsync(WorkflowActivityContext context, string input)
+    private readonly DaprClient _daprClient;
+    private const string PubSubName = "pubsub";
+    private const string ProgressTopic = "workflow-progress";
+    
+    public ConfigureParametersActivity(DaprClient daprClient)
     {
-        Console.WriteLine($"[Activity] ConfigureParametersActivity: {input}");
+        _daprClient = daprClient;
+    }
+    
+    public override async Task<ActivityResult> RunAsync(WorkflowActivityContext context, ActivityInput input)
+    {
+        var percentComplete = (int)((double)input.StepNumber / input.TotalSteps * 100);
+        
+        // Publish progress: starting
+        await _daprClient.PublishEventAsync(PubSubName, ProgressTopic, new WorkflowProgressEvent
+        {
+            WorkflowInstanceId = input.WorkflowInstanceId,
+            WorkflowName = nameof(SetupWorkflow),
+            ActivityName = nameof(ConfigureParametersActivity),
+            PercentComplete = percentComplete - 25 + 5,
+            Message = $"Starting: {input.Description}",
+            Timestamp = DateTime.UtcNow
+        });
+        
+        Console.WriteLine($"[Activity] ConfigureParametersActivity: {input.Description}");
         
         // Simulate work
         await Task.Delay(2000);
+        
+        // Publish progress: completed
+        await _daprClient.PublishEventAsync(PubSubName, ProgressTopic, new WorkflowProgressEvent
+        {
+            WorkflowInstanceId = input.WorkflowInstanceId,
+            WorkflowName = nameof(SetupWorkflow),
+            ActivityName = nameof(ConfigureParametersActivity),
+            PercentComplete = percentComplete,
+            Message = "Parameters configured successfully",
+            Timestamp = DateTime.UtcNow
+        });
         
         return new ActivityResult
         {
@@ -572,14 +701,47 @@ public class ConfigureParametersActivity : WorkflowActivity<string, ActivityResu
     }
 }
 
-public class ValidateConfigurationActivity : WorkflowActivity<string, ActivityResult>
+public class ValidateConfigurationActivity : WorkflowActivity<ActivityInput, ActivityResult>
 {
-    public override async Task<ActivityResult> RunAsync(WorkflowActivityContext context, string input)
+    private readonly DaprClient _daprClient;
+    private const string PubSubName = "pubsub";
+    private const string ProgressTopic = "workflow-progress";
+    
+    public ValidateConfigurationActivity(DaprClient daprClient)
     {
-        Console.WriteLine($"[Activity] ValidateConfigurationActivity: {input}");
+        _daprClient = daprClient;
+    }
+    
+    public override async Task<ActivityResult> RunAsync(WorkflowActivityContext context, ActivityInput input)
+    {
+        var percentComplete = (int)((double)input.StepNumber / input.TotalSteps * 100);
+        
+        // Publish progress: starting
+        await _daprClient.PublishEventAsync(PubSubName, ProgressTopic, new WorkflowProgressEvent
+        {
+            WorkflowInstanceId = input.WorkflowInstanceId,
+            WorkflowName = nameof(SetupWorkflow),
+            ActivityName = nameof(ValidateConfigurationActivity),
+            PercentComplete = percentComplete - 25 + 5,
+            Message = $"Starting: {input.Description}",
+            Timestamp = DateTime.UtcNow
+        });
+        
+        Console.WriteLine($"[Activity] ValidateConfigurationActivity: {input.Description}");
         
         // Simulate work
         await Task.Delay(2500);
+        
+        // Publish progress: completed
+        await _daprClient.PublishEventAsync(PubSubName, ProgressTopic, new WorkflowProgressEvent
+        {
+            WorkflowInstanceId = input.WorkflowInstanceId,
+            WorkflowName = nameof(SetupWorkflow),
+            ActivityName = nameof(ValidateConfigurationActivity),
+            PercentComplete = percentComplete,
+            Message = "Configuration validated successfully",
+            Timestamp = DateTime.UtcNow
+        });
         
         return new ActivityResult
         {
@@ -591,14 +753,47 @@ public class ValidateConfigurationActivity : WorkflowActivity<string, ActivityRe
     }
 }
 
-public class FinalizeSetupActivity : WorkflowActivity<string, ActivityResult>
+public class FinalizeSetupActivity : WorkflowActivity<ActivityInput, ActivityResult>
 {
-    public override async Task<ActivityResult> RunAsync(WorkflowActivityContext context, string input)
+    private readonly DaprClient _daprClient;
+    private const string PubSubName = "pubsub";
+    private const string ProgressTopic = "workflow-progress";
+    
+    public FinalizeSetupActivity(DaprClient daprClient)
     {
-        Console.WriteLine($"[Activity] FinalizeSetupActivity: {input}");
+        _daprClient = daprClient;
+    }
+    
+    public override async Task<ActivityResult> RunAsync(WorkflowActivityContext context, ActivityInput input)
+    {
+        var percentComplete = (int)((double)input.StepNumber / input.TotalSteps * 100);
+        
+        // Publish progress: starting
+        await _daprClient.PublishEventAsync(PubSubName, ProgressTopic, new WorkflowProgressEvent
+        {
+            WorkflowInstanceId = input.WorkflowInstanceId,
+            WorkflowName = nameof(SetupWorkflow),
+            ActivityName = nameof(FinalizeSetupActivity),
+            PercentComplete = percentComplete - 25 + 5,
+            Message = $"Starting: {input.Description}",
+            Timestamp = DateTime.UtcNow
+        });
+        
+        Console.WriteLine($"[Activity] FinalizeSetupActivity: {input.Description}");
         
         // Simulate work
         await Task.Delay(1500);
+        
+        // Publish progress: completed
+        await _daprClient.PublishEventAsync(PubSubName, ProgressTopic, new WorkflowProgressEvent
+        {
+            WorkflowInstanceId = input.WorkflowInstanceId,
+            WorkflowName = nameof(SetupWorkflow),
+            ActivityName = nameof(FinalizeSetupActivity),
+            PercentComplete = percentComplete,
+            Message = "Setup finalized successfully - Workflow complete!",
+            Timestamp = DateTime.UtcNow
+        });
         
         return new ActivityResult
         {
