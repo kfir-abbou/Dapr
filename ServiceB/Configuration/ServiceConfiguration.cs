@@ -27,6 +27,7 @@ public static class ServiceConfiguration
             
             // Register activities
             options.RegisterActivity<DelayActivity>();
+            options.RegisterActivity<SendToServiceCActivity>();
         });
 
         // Add API documentation

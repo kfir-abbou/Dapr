@@ -17,5 +17,6 @@ app.MapHealthEndpoints();
 app.MapEventSubscribers();
 app.MapWorkflowEndpoints();
 app.MapBatchProcessEndpoints();
+app.MapServiceCEventEndpoints();
 
 app.Run();

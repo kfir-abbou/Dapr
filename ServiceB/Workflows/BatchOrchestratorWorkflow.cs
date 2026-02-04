@@ -27,16 +27,10 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
 
         try
         {
-            // Start multiple delay-based activities in parallel
-            Console.WriteLine($"[Orchestrator] [1/5] Starting DataProcessing activity (3s delay)...");
-            var dataProcessingTask = context.CallActivityAsync<WorkflowResult>(
-                nameof(DelayActivity),
-                new DelayActivityInput 
-                { 
-                    WorkflowName = "DataProcessing",
-                    DelayMs = 3000,
-                    InstanceId = $"data-processing-{context.InstanceId}"
-                });
+            // Start multiple activities in parallel
+            // Task 1: ServiceC - Fire and forget + wait for completion event
+            Console.WriteLine($"[Orchestrator] [1/5] Starting ServiceC DataProcessing (fire-and-forget + wait for completion)...");
+            var serviceCTask = CallServiceCAsync(context, input.CorrelationId);
 
             Console.WriteLine($"[Orchestrator] [2/5] Starting Validation activity (2s delay)...");
             var validationTask = context.CallActivityAsync<WorkflowResult>(
@@ -81,7 +75,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
 
             // Wait for ALL to complete
             await Task.WhenAll(
-                dataProcessingTask,
+                serviceCTask,
                 validationTask,
                 enrichmentTask,
                 notificationTask,
@@ -90,7 +84,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
             Console.WriteLine($"[Orchestrator] All tasks completed! Collecting results...");
 
             // Collect results
-            results.Add(await dataProcessingTask);
+            results.Add(await serviceCTask);
             results.Add(await validationTask);
             results.Add(await enrichmentTask);
             results.Add(await notificationTask);
@@ -187,6 +181,76 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
                 InstanceId = approvalId,
                 Success = false,
                 Message = $"Approval timeout - no response within {Constants.ApprovalTimeout.TotalMinutes} minutes",
+                CompletedAt = DateTime.UtcNow
+            };
+        }
+    }
+
+    /// <summary>
+    /// Fire-and-forget call to ServiceC, then wait for completion event
+    /// </summary>
+    private async Task<WorkflowResult> CallServiceCAsync(WorkflowContext context, string correlationId)
+    {
+        var instanceId = $"servicec-{context.InstanceId}";
+        Console.WriteLine($"[ServiceCWorkflow] Starting ServiceC call. Instance: {instanceId}");
+        
+        try
+        {
+            // Fire-and-forget: Send request to ServiceC via pub/sub
+            await context.CallActivityAsync(
+                nameof(SendToServiceCActivity),
+                new ServiceCActivityInput
+                {
+                    CorrelationId = correlationId,
+                    WorkflowInstanceId = context.InstanceId
+                });
+
+            Console.WriteLine($"[ServiceCWorkflow] Request sent to ServiceC. Waiting for completion event (timeout: {Constants.ServiceCTimeout.TotalMinutes} min)...");
+            Console.WriteLine($"[ServiceCWorkflow] >>> ServiceC will publish progress events to servicec-progress topic");
+            Console.WriteLine($"[ServiceCWorkflow] >>> ServiceC will publish completion event to servicec-complete topic");
+
+            // Wait for the completion event from ServiceC
+            var completion = await context.WaitForExternalEventAsync<ServiceCComplete>(
+                Constants.ServiceCCompleteEventName,
+                Constants.ServiceCTimeout);
+
+            if (completion.Success)
+            {
+                Console.WriteLine($"[ServiceCWorkflow] ServiceC completed successfully: {completion.Message}");
+                
+                return new WorkflowResult
+                {
+                    WorkflowName = "ServiceC-DataProcessing",
+                    InstanceId = instanceId,
+                    Success = true,
+                    Message = completion.Message,
+                    CompletedAt = DateTime.UtcNow
+                };
+            }
+            else
+            {
+                Console.WriteLine($"[ServiceCWorkflow] ServiceC completed with failure: {completion.Message}");
+                
+                return new WorkflowResult
+                {
+                    WorkflowName = "ServiceC-DataProcessing",
+                    InstanceId = instanceId,
+                    Success = false,
+                    Message = completion.Message,
+                    CompletedAt = DateTime.UtcNow
+                };
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            Console.WriteLine($"[ServiceCWorkflow] Timeout - no completion from ServiceC within {Constants.ServiceCTimeout.TotalMinutes} minutes");
+            
+            return new WorkflowResult
+            {
+                WorkflowName = "ServiceC-DataProcessing",
+                InstanceId = instanceId,
+                Success = false,
+                Message = $"ServiceC timeout - no completion within {Constants.ServiceCTimeout.TotalMinutes} minutes",
                 CompletedAt = DateTime.UtcNow
             };
         }
