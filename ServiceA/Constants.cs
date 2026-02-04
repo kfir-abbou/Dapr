@@ -10,6 +10,10 @@ public static class Constants
     public const string ItemResponseTopic = "item-responses";
     public const string WorkflowProgressTopic = "workflow-progress";
     
+    // Batch processing topics
+    public const string BatchProcessRequestTopic = "batch-process-request";
+    public const string BatchProcessResponseTopic = "batch-process-response";
+    
     public static readonly string[] ValidStates = { "idle", "running", "setup", "procedure", "error" };
     
     public static readonly Dictionary<string, string[]> ValidTransitions = new()

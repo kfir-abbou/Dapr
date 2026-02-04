@@ -1,4 +1,7 @@
+using Dapr.Workflow;
 using ServiceB.Stores;
+using ServiceB.Workflows;
+using ServiceB.Activities;
 
 namespace ServiceB.Configuration;
 
@@ -14,6 +17,16 @@ public static class ServiceConfiguration
             
             daprClientBuilder.UseHttpEndpoint($"http://localhost:{daprHttpPort}");
             daprClientBuilder.UseGrpcEndpoint($"http://localhost:{daprGrpcPort}");
+        });
+
+        // Add Dapr Workflow
+        services.AddDaprWorkflow(options =>
+        {
+            // Register orchestrator workflow
+            options.RegisterWorkflow<BatchOrchestratorWorkflow>();
+            
+            // Register activities
+            options.RegisterActivity<DelayActivity>();
         });
 
         // Add API documentation

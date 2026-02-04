@@ -57,7 +57,7 @@ public static class ItemEndpoints
 
     private static async Task<IResult> ProcessItem(DaprClient daprClient, [FromBody] ItemProcessRequest request)
     {
-        var correlationId = Guid.NewGuid().ToString();
+        var correlationId =  Guid.NewGuid().ToString();
 
         var message = new ItemProcessMessage
         {

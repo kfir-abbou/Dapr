@@ -15,5 +15,7 @@ app.ConfigureMiddleware();
 app.MapItemEndpoints();
 app.MapHealthEndpoints();
 app.MapEventSubscribers();
+app.MapWorkflowEndpoints();
+app.MapBatchProcessEndpoints();
 
 app.Run();
