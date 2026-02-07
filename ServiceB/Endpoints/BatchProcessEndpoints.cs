@@ -7,6 +7,9 @@ namespace ServiceB.Endpoints;
 
 public static class BatchProcessEndpoints
 {
+    // Get instance ID from environment variable (set in dapr.yaml)
+    private static readonly string InstanceId = Environment.GetEnvironmentVariable("INSTANCE_ID") ?? $"ServiceB-{Environment.ProcessId}";
+    
     public static WebApplication MapBatchProcessEndpoints(this WebApplication app)
     {
         // Subscribe to batch processing requests from Service A
@@ -14,12 +17,13 @@ public static class BatchProcessEndpoints
             async (BatchProcessRequest request, DaprWorkflowClient workflowClient, DaprClient daprClient, ILogger<Program> logger) =>
         {
             Console.WriteLine($"[BatchProcess] >>>>>>>>>> RECEIVED BATCH REQUEST <<<<<<<<<<");
+            Console.WriteLine($"[BatchProcess] Instance: {InstanceId}");
             Console.WriteLine($"[BatchProcess] CorrelationId: {request.CorrelationId}");
             Console.WriteLine($"[BatchProcess] RequestedBy: {request.RequestedBy}");
             
             logger.LogInformation(
-                "[PubSub] Received batch process request: CorrelationId={CorrelationId} from {RequestedBy}",
-                request.CorrelationId, request.RequestedBy);
+                "[{Instance}] Received batch process request: CorrelationId={CorrelationId} from {RequestedBy}",
+                InstanceId, request.CorrelationId, request.RequestedBy);
 
             var startTime = DateTime.UtcNow;
             var orchestratorInstanceId = $"batch-{request.CorrelationId}";
@@ -58,20 +62,28 @@ public static class BatchProcessEndpoints
                     TotalDuration = endTime - startTime
                 };
 
+                Console.WriteLine($"[{InstanceId}] ========================================");
+                Console.WriteLine($"[{InstanceId}] BATCH PROCESSING COMPLETE");
+                Console.WriteLine($"[{InstanceId}] CorrelationId: {request.CorrelationId}");
+                Console.WriteLine($"[{InstanceId}] Success: {response.Success}");
+                Console.WriteLine($"[{InstanceId}] Duration: {response.TotalDuration}");
+                Console.WriteLine($"[{InstanceId}] ========================================");
+
                 await daprClient.PublishEventAsync(
                     Constants.PubSubName,
                     Constants.BatchProcessResponseTopic,
                     response);
 
                 logger.LogInformation(
-                    "[PubSub] Published batch process response: CorrelationId={CorrelationId}, Success={Success}, Duration={Duration}",
-                    response.CorrelationId, response.Success, response.TotalDuration);
+                    "[{Instance}] Published batch response: CorrelationId={CorrelationId}, Success={Success}, Duration={Duration}",
+                    InstanceId, response.CorrelationId, response.Success, response.TotalDuration);
 
                 return Results.Ok();
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Error processing batch request {CorrelationId}", request.CorrelationId);
+                Console.WriteLine($"[{InstanceId}] ERROR: {ex.Message}");
+                logger.LogError(ex, "[{Instance}] Error processing batch request {CorrelationId}", InstanceId, request.CorrelationId);
 
                 // Publish failure response
                 var response = new BatchProcessResponse

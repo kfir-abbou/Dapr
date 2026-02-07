@@ -1,4 +1,5 @@
 # Dapr Multi-App Run configuration
+# This configuration runs multiple ServiceB instances for scalability
 version: 1
 common:
   resourcesPath: ./components
@@ -8,10 +9,11 @@ apps:
     appDirPath: ./ServiceA
     appPort: 5001
     command: ["dotnet", "run"]
-    daprHTTPPort: 3501
+    daprHTTPPort: 3500
     daprGRPCPort: 50001
     metricsPort: 9091
     
+  # ServiceB Instance 1
   - appId: serviceb
     appDirPath: ./ServiceB
     appPort: 5002
@@ -19,6 +21,30 @@ apps:
     daprHTTPPort: 3502
     daprGRPCPort: 50002
     metricsPort: 9092
+    env:
+      INSTANCE_ID: "ServiceB-1"
+
+  # ServiceB Instance 2
+  - appId: serviceb
+    appDirPath: ./ServiceB
+    appPort: 5012
+    command: ["dotnet", "run", "--urls", "http://localhost:5012"]
+    daprHTTPPort: 3512
+    daprGRPCPort: 50012
+    metricsPort: 9192
+    env:
+      INSTANCE_ID: "ServiceB-2"
+
+  # ServiceB Instance 3
+  - appId: serviceb
+    appDirPath: ./ServiceB
+    appPort: 5022
+    command: ["dotnet", "run", "--urls", "http://localhost:5022"]
+    daprHTTPPort: 3522
+    daprGRPCPort: 50022
+    metricsPort: 9292
+    env:
+      INSTANCE_ID: "ServiceB-3"
 
   - appId: servicec
     appDirPath: ./ServiceC

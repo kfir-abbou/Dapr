@@ -10,6 +10,9 @@ namespace ServiceB.Workflows;
 /// </summary>
 public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchOrchestratorOutput>
 {
+    // Get instance ID from environment variable (set in dapr.yaml)
+    private static readonly string ServiceInstanceId = Environment.GetEnvironmentVariable("INSTANCE_ID") ?? $"ServiceB-{Environment.ProcessId}";
+    
     public override async Task<BatchOrchestratorOutput> RunAsync(WorkflowContext context, BatchOrchestratorInput input)
     {
         var results = new List<WorkflowResult>();
@@ -17,22 +20,22 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
         // The approval workflow instance ID - needed for external event
         var approvalId = $"approval-{context.InstanceId}";
 
-        Console.WriteLine($"[Orchestrator] ========================================");
-        Console.WriteLine($"[Orchestrator] Starting BatchOrchestratorWorkflow");
-        Console.WriteLine($"[Orchestrator] Instance ID: {context.InstanceId}");
-        Console.WriteLine($"[Orchestrator] Correlation ID: {input.CorrelationId}");
-        Console.WriteLine($"[Orchestrator] Requested by: {input.RequestedBy}");
-        Console.WriteLine($"[Orchestrator] ========================================");
-        Console.WriteLine($"[Orchestrator] Starting 5 parallel tasks...");
+        Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] ========================================");
+        Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] Starting BatchOrchestratorWorkflow");
+        Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] Instance ID: {context.InstanceId}");
+        Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] Correlation ID: {input.CorrelationId}");
+        Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] Requested by: {input.RequestedBy}");
+        Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] ========================================");
+        Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] Starting 5 parallel tasks...");
 
         try
         {
             // Start multiple activities in parallel
             // Task 1: ServiceC - Fire and forget + wait for completion event
-            Console.WriteLine($"[Orchestrator] [1/5] Starting ServiceC DataProcessing (fire-and-forget + wait for completion)...");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] [1/5] Starting ServiceC DataProcessing (fire-and-forget + wait for completion)...");
             var serviceCTask = CallServiceCAsync(context, input.CorrelationId);
 
-            Console.WriteLine($"[Orchestrator] [2/5] Starting Validation activity (2s delay)...");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] [2/5] Starting Validation activity (2s delay)...");
             var validationTask = context.CallActivityAsync<WorkflowResult>(
                 nameof(DelayActivity),
                 new DelayActivityInput 
@@ -42,7 +45,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
                     InstanceId = $"validation-{context.InstanceId}"
                 });
 
-            Console.WriteLine($"[Orchestrator] [3/5] Starting Enrichment activity (4s delay)...");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] [3/5] Starting Enrichment activity (4s delay)...");
             var enrichmentTask = context.CallActivityAsync<WorkflowResult>(
                 nameof(DelayActivity),
                 new DelayActivityInput 
@@ -52,7 +55,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
                     InstanceId = $"enrichment-{context.InstanceId}"
                 });
 
-            Console.WriteLine($"[Orchestrator] [4/5] Starting Notification activity (1.5s delay)...");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] [4/5] Starting Notification activity (1.5s delay)...");
             var notificationTask = context.CallActivityAsync<WorkflowResult>(
                 nameof(DelayActivity),
                 new DelayActivityInput 
@@ -64,14 +67,14 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
 
             // Wait for the external approval event (with timeout)
             // This runs in parallel with the other activities
-            Console.WriteLine($"[Orchestrator] [5/5] Starting Approval task (waiting for external event, timeout: {Constants.ApprovalTimeout.TotalMinutes} min)...");
-            Console.WriteLine($"[Orchestrator] ----------------------------------------");
-            Console.WriteLine($"[Orchestrator] >>> To approve, POST to: http://localhost:5002/workflow/approve");
-            Console.WriteLine($"[Orchestrator] >>> With body: {{ \"workflowInstanceId\": \"{context.InstanceId}\", \"approvedBy\": \"admin\", \"isApproved\": true }}");
-            Console.WriteLine($"[Orchestrator] ----------------------------------------");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] [5/5] Starting Approval task (waiting for external event, timeout: {Constants.ApprovalTimeout.TotalMinutes} min)...");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] ----------------------------------------");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] >>> To approve, POST to: http://localhost:5002/workflow/approve");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] >>> With body: {{ \"workflowInstanceId\": \"{context.InstanceId}\", \"approvedBy\": \"admin\", \"isApproved\": true }}");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] ----------------------------------------");
             var approvalTask = WaitForApprovalAsync(context, approvalId);
 
-            Console.WriteLine($"[Orchestrator] All 5 tasks started. Waiting for completion (Task.WhenAll)...");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] All 5 tasks started. Waiting for completion (Task.WhenAll)...");
 
             // Wait for ALL to complete
             await Task.WhenAll(
@@ -81,7 +84,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
                 notificationTask,
                 approvalTask);
 
-            Console.WriteLine($"[Orchestrator] All tasks completed! Collecting results...");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] All tasks completed! Collecting results...");
 
             // Collect results
             results.Add(await serviceCTask);
@@ -94,17 +97,17 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
             var successCount = results.Count(r => r.Success);
             var failedCount = results.Count(r => !r.Success);
 
-            Console.WriteLine($"[Orchestrator] ========================================");
-            Console.WriteLine($"[Orchestrator] WORKFLOW COMPLETE");
-            Console.WriteLine($"[Orchestrator] Success: {allSucceeded}");
-            Console.WriteLine($"[Orchestrator] Tasks succeeded: {successCount}/{results.Count}");
-            Console.WriteLine($"[Orchestrator] Tasks failed: {failedCount}/{results.Count}");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] ========================================");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] WORKFLOW COMPLETE");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] Success: {allSucceeded}");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] Tasks succeeded: {successCount}/{results.Count}");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] Tasks failed: {failedCount}/{results.Count}");
             foreach (var result in results)
             {
                 var status = result.Success ? "✓" : "✗";
-                Console.WriteLine($"[Orchestrator]   {status} {result.WorkflowName}: {result.Message}");
+                Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator]   {status} {result.WorkflowName}: {result.Message}");
             }
-            Console.WriteLine($"[Orchestrator] ========================================");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] ========================================");
 
             return new BatchOrchestratorOutput
             {
@@ -117,10 +120,10 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Orchestrator] ========================================");
-            Console.WriteLine($"[Orchestrator] WORKFLOW FAILED");
-            Console.WriteLine($"[Orchestrator] Error: {ex.Message}");
-            Console.WriteLine($"[Orchestrator] ========================================");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] ========================================");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] WORKFLOW FAILED");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] Error: {ex.Message}");
+            Console.WriteLine($"[{ServiceInstanceId}] [Orchestrator] ========================================");
 
             return new BatchOrchestratorOutput
             {
@@ -133,7 +136,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
 
     private async Task<WorkflowResult> WaitForApprovalAsync(WorkflowContext context, string approvalId)
     {
-        Console.WriteLine($"[ApprovalWorkflow] Waiting for external approval. Instance: {approvalId}");
+        Console.WriteLine($"[{ServiceInstanceId}] [ApprovalWorkflow] Waiting for external approval. Instance: {approvalId}");
         
         try
         {
@@ -144,7 +147,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
 
             if (approval.IsApproved)
             {
-                Console.WriteLine($"[ApprovalWorkflow] Approved by {approval.ApprovedBy}");
+                Console.WriteLine($"[{ServiceInstanceId}] [ApprovalWorkflow] Approved by {approval.ApprovedBy}");
                 
                 return new WorkflowResult
                 {
@@ -158,7 +161,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
             }
             else
             {
-                Console.WriteLine($"[ApprovalWorkflow] Rejected by {approval.ApprovedBy}");
+                Console.WriteLine($"[{ServiceInstanceId}] [ApprovalWorkflow] Rejected by {approval.ApprovedBy}");
                 
                 return new WorkflowResult
                 {
@@ -173,7 +176,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
         }
         catch (TaskCanceledException)
         {
-            Console.WriteLine($"[ApprovalWorkflow] Timeout - no approval received within {Constants.ApprovalTimeout.TotalMinutes} minutes");
+            Console.WriteLine($"[{ServiceInstanceId}] [ApprovalWorkflow] Timeout - no approval received within {Constants.ApprovalTimeout.TotalMinutes} minutes");
             
             return new WorkflowResult
             {
@@ -192,7 +195,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
     private async Task<WorkflowResult> CallServiceCAsync(WorkflowContext context, string correlationId)
     {
         var instanceId = $"servicec-{context.InstanceId}";
-        Console.WriteLine($"[ServiceCWorkflow] Starting ServiceC call. Instance: {instanceId}");
+        Console.WriteLine($"[{ServiceInstanceId}] [ServiceCWorkflow] Starting ServiceC call. Instance: {instanceId}");
         
         try
         {
@@ -205,9 +208,9 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
                     WorkflowInstanceId = context.InstanceId
                 });
 
-            Console.WriteLine($"[ServiceCWorkflow] Request sent to ServiceC. Waiting for completion event (timeout: {Constants.ServiceCTimeout.TotalMinutes} min)...");
-            Console.WriteLine($"[ServiceCWorkflow] >>> ServiceC will publish progress events to servicec-progress topic");
-            Console.WriteLine($"[ServiceCWorkflow] >>> ServiceC will publish completion event to servicec-complete topic");
+            Console.WriteLine($"[{ServiceInstanceId}] [ServiceCWorkflow] Request sent to ServiceC. Waiting for completion event (timeout: {Constants.ServiceCTimeout.TotalMinutes} min)...");
+            Console.WriteLine($"[{ServiceInstanceId}] [ServiceCWorkflow] >>> ServiceC will publish progress events to servicec-progress topic");
+            Console.WriteLine($"[{ServiceInstanceId}] [ServiceCWorkflow] >>> ServiceC will publish completion event to servicec-complete topic");
 
             // Wait for the completion event from ServiceC
             var completion = await context.WaitForExternalEventAsync<ServiceCComplete>(
@@ -216,7 +219,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
 
             if (completion.Success)
             {
-                Console.WriteLine($"[ServiceCWorkflow] ServiceC completed successfully: {completion.Message}");
+                Console.WriteLine($"[{ServiceInstanceId}] [ServiceCWorkflow] ServiceC completed successfully: {completion.Message}");
                 
                 return new WorkflowResult
                 {
@@ -229,7 +232,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
             }
             else
             {
-                Console.WriteLine($"[ServiceCWorkflow] ServiceC completed with failure: {completion.Message}");
+                Console.WriteLine($"[{ServiceInstanceId}] [ServiceCWorkflow] ServiceC completed with failure: {completion.Message}");
                 
                 return new WorkflowResult
                 {
@@ -243,7 +246,7 @@ public class BatchOrchestratorWorkflow : Workflow<BatchOrchestratorInput, BatchO
         }
         catch (TaskCanceledException)
         {
-            Console.WriteLine($"[ServiceCWorkflow] Timeout - no completion from ServiceC within {Constants.ServiceCTimeout.TotalMinutes} minutes");
+            Console.WriteLine($"[{ServiceInstanceId}] [ServiceCWorkflow] Timeout - no completion from ServiceC within {Constants.ServiceCTimeout.TotalMinutes} minutes");
             
             return new WorkflowResult
             {

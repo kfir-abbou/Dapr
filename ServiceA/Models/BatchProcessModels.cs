@@ -19,7 +19,7 @@ public record BatchProcessResponse
     public string CorrelationId { get; init; } = string.Empty;
     public bool Success { get; init; }
     public string Message { get; init; } = string.Empty;
-    public List<WorkflowResultInfo> WorkflowResults { get; init; } = new();
+    public List<WorkflowResult> WorkflowResults { get; init; } = new();
     public DateTime CompletedAt { get; init; }
     public TimeSpan TotalDuration { get; init; }
 }
@@ -27,7 +27,7 @@ public record BatchProcessResponse
 /// <summary>
 /// Result from an individual workflow
 /// </summary>
-public record WorkflowResultInfo
+public record WorkflowResult
 {
     public string WorkflowName { get; init; } = string.Empty;
     public string InstanceId { get; init; } = string.Empty;
