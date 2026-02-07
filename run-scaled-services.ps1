@@ -1,5 +1,10 @@
 # Run all services with multiple ServiceB instances
 # Requires: Redis running (use start-redis.ps1 first)
+# Usage: .\run-scaled-services.ps1 [-Clean]
+
+param(
+    [switch]$Clean
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -26,6 +31,16 @@ catch {
     Write-Host "Run .\start-redis.ps1 manually if needed." -ForegroundColor Yellow
 }
 
+# Clear Redis if -Clean flag is specified
+if ($Clean) {
+    Write-Host ""
+    Write-Host "Clearing Redis data (workflows, state, pub/sub messages)..." -ForegroundColor Yellow
+    # Try both container names (dapr_redis and dapr-redis)
+    docker exec dapr_redis redis-cli FLUSHALL 2>$null | Out-Null
+    docker exec dapr-redis redis-cli FLUSHALL 2>$null | Out-Null
+    Write-Host "Redis cleared!" -ForegroundColor Green
+}
+
 Write-Host ""
 Write-Host "Starting Dapr Multi-App Run..." -ForegroundColor Cyan
 Write-Host ""
@@ -36,6 +51,7 @@ Write-Host "  - ServiceB-2: http://localhost:5012 (Dapr: 3512)" -ForegroundColor
 Write-Host "  - ServiceB-3: http://localhost:5022 (Dapr: 3522)" -ForegroundColor Gray
 Write-Host "  - ServiceC:   http://localhost:5003 (Dapr: 3503)" -ForegroundColor Gray
 Write-Host ""
+Write-Host "Tip: Use -Clean flag to clear Redis before starting (removes old messages)" -ForegroundColor DarkGray
 Write-Host "Press Ctrl+C to stop all services" -ForegroundColor Yellow
 Write-Host ""
 

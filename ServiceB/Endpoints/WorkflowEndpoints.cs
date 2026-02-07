@@ -1,5 +1,6 @@
 using Dapr.Workflow;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.DurableTask.Client;
 using ServiceB.Models;
 
 namespace ServiceB.Endpoints;
@@ -37,6 +38,34 @@ public static class WorkflowEndpoints
         {
             try
             {
+                // First check if the workflow instance exists
+                var state = await workflowClient.GetWorkflowStateAsync(request.WorkflowInstanceId);
+                if (state == null)
+                {
+                    logger.LogWarning(
+                        "[Workflow] Approval failed - workflow instance '{InstanceId}' not found",
+                        request.WorkflowInstanceId);
+                    return Results.NotFound(new
+                    {
+                        Error = $"Workflow instance '{request.WorkflowInstanceId}' not found",
+                        Hint = "Check the console output for the correct workflow instance ID (e.g., 'batch-xxxxx')"
+                    });
+                }
+
+                // Check if workflow is still running
+                if (state.RuntimeStatus.ToString() != OrchestrationRuntimeStatus.Running.ToString())
+                {
+                    logger.LogWarning(
+                        "[Workflow] Approval failed - workflow instance '{InstanceId}' is not running (status: {Status})",
+                        request.WorkflowInstanceId, state.RuntimeStatus);
+                    return Results.BadRequest(new
+                    {
+                        Error = $"Workflow instance '{request.WorkflowInstanceId}' is not running",
+                        Status = state.RuntimeStatus.ToString(),
+                        Hint = "The workflow may have already completed or timed out"
+                    });
+                }
+
                 var approvalEvent = new ApprovalEvent
                 {
                     ApprovedBy = request.ApprovedBy,
@@ -79,10 +108,10 @@ public static class WorkflowEndpoints
             return Results.Ok(new
             {
                 Message = "To approve a waiting workflow, call POST /workflow/approve",
-                Note = "The workflow instance ID is the batch orchestrator ID (batch-{correlationId})",
+                Note = "The workflow instance ID is the orchestrator instance ID shown in the console output when the workflow starts (e.g., 'batch-d2a57daf011e40df875f34d81a35a55f')",
                 Example = new TriggerApprovalRequest
                 {
-                    WorkflowInstanceId = "batch-{correlationId}",
+                    WorkflowInstanceId = "batch-<your-instance-id>",
                     ApprovedBy = "admin",
                     IsApproved = true,
                     Comments = "Looks good!"
